@@ -26,8 +26,10 @@ Install tools:
 * `sudo apt install python3-pip picocom`
 * `pip install esptool`
 
-If `esptool` doesn't work ("Could not open /dev/ttyUSB0, the port doesn't exist"):
-* `sudo chmod a+rw /dev/ttyUSB0`
+Flash ESP8266 with [MicroPython Firmware](https://micropython.org/download/ESP8266_GENERIC/):
+* `esptool.py --port /dev/ttyUSB0 erase_flash`
+* `esptool.py --port /dev/ttyUSB0 --baud 460800 write_flash --flash_size=detect 0 ESP8266_GENERIC-20231005-v1.21.0.bin`
+* If `esptool` doesn't work ("Could not open /dev/ttyUSB0, the port doesn't exist"): `sudo chmod a+rw /dev/ttyUSB0`
 
 Connect to MicroPython REPL:
 * `picocom /dev/ttyUSB0 -b115200`
