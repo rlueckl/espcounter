@@ -1,12 +1,19 @@
 /*
 40000000 / year
-6.342 / 5 sec
-1.268 / sec
+6.341958 / 5 sec
+1.268391 / sec
 */
+
+#define MPS  1.268391 // meters per seconds
+#define LOOP 5        // loop every X seconds
+#define BTN_IN  4     // pin D2 for button input
+#define BTN_OUT 5     // pin D1 for button output
 
 #include <SPI.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
+
+#include <time.h>
 
 #define MAX7219_NUM_CHIPS   1  // 3 chips = 24 digits
 #define MAX7219_CS_PIN     15  // pin the MAX7219's CS pin is connected to
@@ -16,10 +23,10 @@
 
 MAX7219_8_Digit_Driver my_display(MAX7219_CS_PIN, MAX7219_NUM_CHIPS);
 
-// Wifi
+// Include parameters for WiFi and API
 #include "mySettings.h"
 
-// Let'sEncrypt root cert
+// Let's Encrypt root cert
 const char IRG_Root_X1 [] PROGMEM = R"CERT(
 -----BEGIN CERTIFICATE-----
 MIIFYDCCBEigAwIBAgIQQAF3ITfU6UK47naqPGQKtzANBgkqhkiG9w0BAQsFADA/
@@ -56,9 +63,11 @@ Dfvp7OOGAN6dEOM4+qR9sdjoSYKEBpsr6GtPAQw4dy753ec5
 
 X509List cert(IRG_Root_X1);
 
-int counter = 0;
+double prod = 0.0;
 
-#include <time.h>
+#if !defined(__time_t_defined)
+typedef double time_t;
+#endif
 
 void setup() {
   Serial.begin(115200); delay(10);
@@ -66,7 +75,7 @@ void setup() {
 
   my_display.String_To_Buffer("   H1   ", MAX7219_BRIGHTNESS);
 
-  // ssid & pass in settings.ino - DO NOT CHECK IN!
+  // SSID and password are in mySettings.h - DO NOT CHECK IN!
   WiFi.begin(ssid, pass);
   Serial.print("Connecting to "); Serial.print(ssid); Serial.println(" ...");
 
@@ -83,76 +92,64 @@ void setup() {
   configTime(3*3600, 0, "pool.ntp.org", "time.nist.gov");
   Serial.print("Waiting for NTP time sync: ");
 
-  time_t now = time(nullptr);
+  time_t ts_now = time(nullptr);
 
-  while (now < 8*3600*2) {
+  while (ts_now < 8*3600*2) {
     delay(500);
     Serial.print(".");
-    now = time(nullptr);
+    ts_now = time(nullptr);
   }
   Serial.println();
 
-  struct tm timeinfo;
-  gmtime_r(&now, &timeinfo);
-  Serial.print("Current time: ");
-  Serial.print(asctime(&timeinfo));
+  struct tm time_now;
+  gmtime_r(&ts_now, &time_now);
+  Serial.printf("[TIME] now: %s", asctime(&time_now));
 
-  WiFiClientSecure client;
+  time_t ts_start;
+  struct tm time_start;
 
-  // Wait for WiFi connection
-  if ((WiFi.status() == WL_CONNECTED)) {
+  time_start.tm_year = time_now.tm_year;
+  time_start.tm_mon = 0;
+  time_start.tm_mday = 1;
+  time_start.tm_hour = 0;
+  time_start.tm_min = 0;
+  time_start.tm_sec = 0;
+  time_start.tm_isdst = time_now.tm_isdst; // We already have the current time, get DST from that.
+  ts_start = mktime(&time_start) + 3*3600; // Add some hours to get to GMT. See also timegm() and timezone foo.
 
-    client.setTrustAnchors(&cert);
+  Serial.printf("[TIME] year start: %s", asctime(&time_start));
 
-    HTTPClient https;
+  time_t ts_diff;
+  ts_diff = ts_now - ts_start;
+  double ts_diffd = (double) ts_diff;
+  Serial.printf("[TIME] diff in seconds: %.2f\n", ts_diffd);
 
-    Serial.print("[HTTPS] Begin\n");
-    // API URL in settings.ino - DO NOT CHECK IN!
-    if (https.begin(client, apiurl)) {  // HTTPS
+  // ts_diff               :  seconds since Jan 1
+  // MPS                   :  how many meters per second are done
+  // prod = ts_diff * MPS  :  this years production at boot time
+  prod = ts_diffd * MPS;
+  Serial.printf("[PROD] at boot: %.2f\n", prod);
 
-      Serial.print("[HTTPS] GET ... ");
-      // Start connection and send HTTP header
-      int httpCode = https.GET();
-
-      // httpCode will be negative on error
-      if (httpCode > 0) {
-        // HTTP header has been send and Server response header has been handled
-        Serial.printf("code: %d\n", httpCode);
-
-        // File found at server
-        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-          counter = https.getString().toInt();
-          Serial.printf("[HTTPS] GET value: %i\n", counter);
-        }
-      } else {
-        Serial.printf("failed, error: %s\n", https.errorToString(httpCode).c_str());
-        my_display.String_To_Buffer("6Et FA1L", MAX7219_BRIGHTNESS);
-      }
-
-      https.end();
-    } else {
-      Serial.printf("[HTTPS] Unable to connect\n");
-    }
-  }
-
-  struct tm t;
-  time_t t_of_day;
-  t.tm_year = timeinfo.tm_year;
-  t.tm_mon = 0;
-  t.tm_mday = 1;
-  t.tm_hour = 0;
-  t.tm_min = 0;
-  t.tm_sec = 0;
-  t.tm_isdst = timeinfo.tm_isdst; // We already have the current time, get DST from that.
-  t_of_day = mktime(&t) + 3*3600; // Add some hours to get to GMT. See also timegm() and timezone foo.
-  Serial.println(t_of_day);
-
-
-  //Serial.println(timest_jan1);
+  // Reset pins at boot
+  pinMode(BTN_OUT, OUTPUT);
+  digitalWrite(BTN_OUT, LOW);
 }
 
 void loop() {
+  double corr = 0.0;
+  // Get correction difference from API
+  if (check_btn()) {
+    Serial.println("[DEBUG] Button pressed, get corrections.");
+    my_display.String_To_Buffer(" UPDATE ", MAX7219_BRIGHTNESS);
+    corr = get_value_from_api();
+    Serial.printf("[DEBUG] Correct by: %.2f\n", corr);
+  }
+
+  prod = prod + (MPS * LOOP) + corr;
+
   // The decimal point does not count against the length of the character string
-  my_display.String_To_Buffer(String(counter++), MAX7219_BRIGHTNESS);
-  delay(1000);
+  //my_display.String_To_Buffer(String(counter++), MAX7219_BRIGHTNESS);
+  my_display.String_To_Buffer(String(prod, 0), MAX7219_BRIGHTNESS);
+  Serial.printf("[PROD] current: %.2f\n", prod);
+  delay(LOOP*1000-50);
 }
