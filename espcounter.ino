@@ -19,7 +19,7 @@
 #define MAX7219_CS_PIN     15  // pin the MAX7219's CS pin is connected to
 #define MAX7219_BRIGHTNESS  3  // brightness level 0-15
 
-#include <MAX7219_8_Digit_Driver.h>
+#include "MAX7219_8_Digit_Driver.h"
 
 MAX7219_8_Digit_Driver my_display(MAX7219_CS_PIN, MAX7219_NUM_CHIPS);
 
