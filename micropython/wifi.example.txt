@@ -1,1 +1,0 @@
-your_wifi_ssid;your_wifi_password;
